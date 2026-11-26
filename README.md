@@ -8,7 +8,7 @@ Web testing playground berbasis Node.js tanpa dependency eksternal. Masukkan URL
 npm start
 ```
 
-Buka `http://localhost:3000` (atau URL preview yang diberikan). Port bisa diubah lewat environment variable `PORT`.
+Buka `http://localhost:3000` (atau URL preview yang diberikan). Port bisa diubah lewat environment variable `PORT`. Timeout default tool bisa diubah lewat `REQUEST_TIMEOUT` dan `CURL_TIMEOUT` (milidetik, maksimal 60000), atau lewat selector timeout di UI.
 
 ## Fitur
 
@@ -20,6 +20,7 @@ Buka `http://localhost:3000` (atau URL preview yang diberikan). Port bisa diubah
 | **Security Headers** | Audit CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, dan lain-lain dengan skor 0–100. |
 | **DNS Lookup** | Rekaman A, AAAA, CNAME, MX, TXT, dan NS untuk sebuah host. |
 | **Network Timing** | Waterfall DNS → TCP → TLS → TTFB → download dari inspeksi terakhir. |
+| **Konektivitas / Diagnostics** | Cek DNS → TCP → TLS → HTTP satu per satu untuk melihat tepat di mana koneksi ke URL terputus. |
 | **Activity Log** | Riwayat aksi dan pesan `console.log`/error dari halaman yang dibuka dalam mode Proxy. |
 
 ## Catatan
@@ -27,6 +28,8 @@ Buka `http://localhost:3000` (atau URL preview yang diberikan). Port bisa diubah
 - Situs seperti Google, GitHub, Facebook, dan banyak aplikasi lain mengirim `X-Frame-Options: DENY` atau CSP `frame-ancestors`, sehingga tidak bisa tampil di iframe biasa. Mode **Proxy** mencoba mengatasi ini dengan mengambil HTML dari server, tetapi JavaScript halaman tersebut tetap bisa gagal karena pembatasan cookies/CORS.
 - Request HTTP, cURL, dan proxy dijalankan dari server. Pastikan hanya orang yang dipercaya yang memiliki akses ke tool ini bila di-deploy publik; sandbox ini bukan pengganti audit keamanan.
 - Di lingkungan preview dengan jaringan terbatas, hanya domain yang diizinkan platform yang bisa dijangkau oleh tool server-side. Mode **Embed** tetap membuka situs langsung dari browser pengguna.
+- Untuk membuka **web lokal yang berjalan di PC/laptop** dari HP (mis. Termux), jangan pakai `localhost` — itu merujuk ke HP. Gunakan IP LAN PC (contoh `http://192.168.1.5:8080`), pastikan kedua perangkat di WiFi sama, server web PC bind ke `0.0.0.0`, dan firewall PC mengizinkan port tersebut.
+- Aplikasi perbankan/fintech (mis. `dana.id`) sengaja memblokir iframe dan request otomatis lewat header `X-Frame-Options`/CSP serta WAF anti-bot, jadi wajar bila timeout di semua mode. Gunakan situs uji seperti `example.com`, `httpbin.org`, `api.github.com`, `registry.npmjs.org`, atau `pypi.org`.
 
 ## Struktur
 

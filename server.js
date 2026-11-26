@@ -5,6 +5,8 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
+const net = require('node:net');
+const tls = require('node:tls');
 const dnsPromises = require('node:dns').promises;
 const { spawn } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
@@ -13,6 +15,9 @@ const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_CURL_OUTPUT = 1024 * 1024;
+const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
+const DEFAULT_TIMEOUT = clamp(process.env.REQUEST_TIMEOUT, 5000, 60000) || 30000;
+const DEFAULT_CURL_TIMEOUT = clamp(process.env.CURL_TIMEOUT, 5000, 60000) || 30000;
 
 // Gunakan CA sistem agar request HTTPS tetap terverifikasi di lingkungan dengan proxy/CB TLS korporat.
 let systemCa = null;
@@ -130,7 +135,7 @@ function roundTrip(rawUrl, options = {}) {
     const requestOptions = {
       method: options.method || 'GET',
       headers,
-      timeout: options.timeout || 15000,
+      timeout: options.timeout || DEFAULT_TIMEOUT,
     };
     if (target.protocol === 'https:' && systemCa) requestOptions.ca = systemCa;
     const req = lib.request(
@@ -192,7 +197,7 @@ function roundTrip(rawUrl, options = {}) {
         if (target.protocol === 'https:') timings.secureConnect = 0;
       }
     });
-    req.on('timeout', () => req.destroy(new Error('Request timeout (15 detik).')));
+    req.on('timeout', () => req.destroy(new Error(`Request timeout (${Math.round((options.timeout || DEFAULT_TIMEOUT) / 1000)} detik).`)));
     req.on('error', (err) => resolve({ error: friendlyError(err.message) }));
     if (options.body) req.write(typeof options.body === 'string' ? options.body : JSON.stringify(options.body));
     req.end();
@@ -254,7 +259,7 @@ function tokenizeCommand(command) {
   return tokens;
 }
 
-function runCurl(command) {
+function runCurl(command, timeoutMs = DEFAULT_CURL_TIMEOUT) {
   return new Promise((resolve) => {
     const tokens = tokenizeCommand(command);
     if (!tokens.length || tokens[0].toLowerCase() !== 'curl') {
@@ -276,14 +281,14 @@ function runCurl(command) {
     let stdout = '';
     let stderr = '';
     let killed = false;
-    const child = spawn('curl', [...args, '--max-time', '20'], { windowsHide: true });
+    const child = spawn('curl', [...args, '--max-time', String(Math.ceil(timeoutMs / 1000))], { windowsHide: true });
     const guard = setTimeout(() => {
       if (!killed) {
         killed = true;
         child.kill('SIGKILL');
-        stderr += '\n[sloty] Proses dihentikan setelah 25 detik.';
+        stderr += `\n[sloty] Proses dihentikan setelah ${Math.round(timeoutMs / 1000)} detik.`;
       }
-    }, 25000);
+    }, timeoutMs + 5000);
     child.stdout.on('data', (chunk) => {
       if (stdout.length < MAX_CURL_OUTPUT) stdout += chunk.toString('utf8').slice(0, MAX_CURL_OUTPUT - stdout.length);
     });
@@ -341,6 +346,81 @@ async function dnsLookup(input) {
   };
 }
 
+function tcpCheck(host, port, timeout) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const socket = net.connect({ host, port });
+    let finished = false;
+    const finish = (ok, detail) => {
+      if (finished) return;
+      finished = true;
+      socket.destroy();
+      resolve({ layer: 'TCP', ok, detail, ms: Math.round(performance.now() - started) });
+    };
+    socket.setTimeout(timeout);
+    socket.once('connect', () => finish(true, `Terhubung ke ${host}:${port}`));
+    socket.once('timeout', () => finish(false, `TCP timeout setelah ${Math.round(timeout / 1000)} detik`));
+    socket.once('error', (err) => finish(false, friendlyError(err.message)));
+  });
+}
+
+function tlsCheck(host, port, timeout) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const options = { host, port, servername: host, timeout };
+    if (systemCa) options.ca = systemCa;
+    const socket = tls.connect(options);
+    let finished = false;
+    const finish = (ok, detail) => {
+      if (finished) return;
+      finished = true;
+      socket.destroy();
+      resolve({ layer: 'TLS', ok, detail, ms: Math.round(performance.now() - started) });
+    };
+    socket.once('secureConnect', () => finish(true, `TLS OK · ${socket.getProtocol() || 'HTTPS'}`));
+    socket.once('timeout', () => finish(false, `TLS timeout setelah ${Math.round(timeout / 1000)} detik`));
+    socket.once('error', (err) => finish(false, friendlyError(err.message)));
+  });
+}
+
+async function diagnoseTarget(rawUrl, timeout = DEFAULT_TIMEOUT) {
+  const url = normalizeUrl(rawUrl);
+  const target = new URL(url);
+  const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
+  const checks = [];
+
+  const startedDns = performance.now();
+  try {
+    const addresses = await dnsPromises.lookup(target.hostname, { all: true });
+    checks.push({
+      layer: 'DNS',
+      ok: addresses.length > 0,
+      detail: addresses.map((a) => a.address).join(', '),
+      ms: Math.round(performance.now() - startedDns),
+    });
+  } catch (err) {
+    checks.push({ layer: 'DNS', ok: false, detail: friendlyError(err.message), ms: Math.round(performance.now() - startedDns) });
+    return { url, host: target.hostname, port, protocol: target.protocol, checks };
+  }
+
+  checks.push(await tcpCheck(target.hostname, port, timeout));
+  if (!checks[checks.length - 1].ok) return { url, host: target.hostname, port, protocol: target.protocol, checks };
+
+  if (target.protocol === 'https:') {
+    checks.push(await tlsCheck(target.hostname, port, timeout));
+    if (!checks[checks.length - 1].ok) return { url, host: target.hostname, port, protocol: target.protocol, checks };
+  }
+
+  const response = await roundTrip(url, { method: 'GET', maxBytes: 4096, timeout });
+  checks.push({
+    layer: 'HTTP',
+    ok: !response.error && response.status < 500,
+    detail: response.error || `${response.status} ${response.statusText || ''} · ${response.contentType || 'tanpa content-type'}`,
+    ms: response.timings?.total ?? null,
+  });
+  return { url, host: target.hostname, port, protocol: target.protocol, checks };
+}
+
 const CONSOLE_BRIDGE = `<script>
 (function(){
   var send=function(level,args){try{parent.postMessage({__slotyBridge:true,level:level,text:Array.prototype.map.call(args,function(a){try{return typeof a==='object'?JSON.stringify(a):String(a)}catch(e){return String(a)}}).join(' ')},'*')}catch(e){}};
@@ -354,8 +434,9 @@ function escapeAttr(value) {
   return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
-async function proxyHtml(url) {
+async function proxyHtml(url, timeout = DEFAULT_TIMEOUT) {
   const result = await inspectTarget(url, {
+    timeout,
     method: 'GET',
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SlotyDevLab/1.0)', Accept: 'text/html,application/xhtml+xml' },
     maxBytes: 3 * 1024 * 1024,
@@ -414,15 +495,17 @@ const server = http.createServer(async (req, res) => {
           headers: payload.headers || {},
           body: payload.body || null,
           followRedirects: payload.followRedirects !== false,
-          timeout: 15000,
+          timeout: clamp(payload.timeout, 5000, 60000) || DEFAULT_TIMEOUT,
         });
         sendJson(res, result.error ? 200 : 200, result);
       } else if (url.pathname === '/api/curl') {
-        sendJson(res, 200, await runCurl(payload.command || ''));
+        sendJson(res, 200, await runCurl(payload.command || '', clamp(payload.timeout, 5000, 60000) || DEFAULT_CURL_TIMEOUT));
+      } else if (url.pathname === '/api/diagnose') {
+        sendJson(res, 200, await diagnoseTarget(payload.url || '', clamp(payload.timeout, 5000, 60000) || DEFAULT_TIMEOUT));
       } else if (url.pathname === '/api/dns') {
         sendJson(res, 200, await dnsLookup(payload.host || ''));
       } else if (url.pathname === '/api/proxy') {
-        sendJson(res, 200, await proxyHtml(payload.url || ''));
+        sendJson(res, 200, await proxyHtml(payload.url || '', clamp(payload.timeout, 5000, 60000) || DEFAULT_TIMEOUT));
       } else {
         sendJson(res, 404, { error: 'Endpoint tidak ditemukan.' });
       }

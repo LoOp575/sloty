@@ -10,6 +10,7 @@ const ICONS = {
   dns: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>',
   network: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9m5 10V5m5 14v-7m5 7V8"/></svg>',
   console: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 7 5 5-5 5M13 17h6"/></svg>',
+  diagnose: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5M8 10.5h5M10.5 8v5"/></svg>',
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/></svg>',
   reload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 6M20 5v6h-6"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>',
@@ -36,6 +37,7 @@ const NAV = [
     { id: 'curl', label: 'cURL Lab', icon: 'terminal' },
     { id: 'headers', label: 'Security Headers', icon: 'shield' },
     { id: 'dns', label: 'DNS Lookup', icon: 'dns' },
+    { id: 'diagnose', label: 'Konektivitas', icon: 'diagnose' },
   ]},
 ];
 
@@ -49,7 +51,7 @@ const state = {
   proxyInfo: null,
   frameLoadMs: null,
   http: {
-    method: 'GET', url: 'https://example.com', headers: [], body: '', followRedirects: true,
+    method: 'GET', url: 'https://example.com', headers: [], body: '', followRedirects: true, timeout: 30000,
   },
   httpResult: null,
   httpTab: 'headers',
@@ -57,6 +59,8 @@ const state = {
   curlResult: null,
   dnsHost: 'example.com',
   dnsResult: null,
+  diagnoseUrl: 'https://dana.id',
+  diagnoseResult: null,
   logs: [],
   busy: false,
 };
@@ -195,6 +199,9 @@ function goUrl(value, view = 'browser') {
   const url = String(value || '').trim();
   if (!url) return;
   state.url = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  if (/:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(state.url)) {
+    toast('Catatan: localhost di sini = perangkat yang menjalankan server. Kalau web kamu di PC lain, pakai IP LAN PC.', true);
+  }
   const globalInput = document.getElementById('globalUrl');
   if (globalInput) globalInput.value = state.url;
   state.http.url = state.url;
@@ -225,7 +232,7 @@ async function loadProxy() {
   const info = document.getElementById('proxyStatus');
   if (info) info.innerHTML = '<span class="spinner"></span> Mengambil HTML lewat server…';
   try {
-    const data = await api('/api/proxy', { url: state.loadedUrl });
+    const data = await api('/api/proxy', { url: state.loadedUrl, timeout: state.http.timeout });
     state.proxyHtml = data.html;
     state.proxyInfo = data;
     const frame = document.getElementById('previewFrame');
@@ -245,7 +252,10 @@ async function loadProxy() {
     log('error', `Proxy gagal: ${err.message}`);
     toast(err.message, true);
     const el = document.getElementById('proxyStatus');
-    if (el) el.innerHTML = `<span class="badge danger">Gagal</span> ${esc(err.message)}`;
+    if (el) el.innerHTML = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span class="badge danger">Gagal</span> ${esc(err.message)}
+      <button class="chip" data-mode="embed">Coba Embed</button>
+      <button class="chip" data-action="open-new">Buka tab baru</button>
+      <button class="chip" data-action="to-diagnose">Diagnosa koneksi</button></div>`;
   }
 }
 
@@ -268,6 +278,7 @@ function browserView() {
   return `
     ${pageHead('BROWSER · EMBED', 'Browser Embed', 'Masukkan URL situs, lalu jalankan di dalam dashboard ini. Gunakan mode Proxy bila situs memblokir iframe (X-Frame-Options / CSP frame-ancestors).')}
     <div class="notice" style="margin-bottom:16px">${ICONS.info}<div><strong>Catatan iframe:</strong> banyak situs besar (Google, GitHub, Facebook, dll.) secara sengaja melarang ditampilkan di dalam iframe. Bila halaman kosong, coba tombol <strong>Proxy</strong> atau buka di tab baru. Console dari halaman proxy otomatis masuk ke Activity Log.</div></div>
+    ${/:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(state.loadedUrl || state.url) ? `<div class="notice info" style="margin-bottom:16px">${ICONS.info}<div><strong>URL lokal terdeteksi.</strong> <span class="mono">localhost</span> / <span class="mono">127.0.0.1</span> di sini merujuk ke perangkat yang menjalankan server (HP Termux), bukan PC lain. Kalau web kamu ada di laptop, gunakan IP LAN seperti <span class="mono">http://192.168.1.5:8080</span> dan pastikan PC serta HP berada di WiFi yang sama.</div></div>` : ''}
     <div class="browser-shell">
       <div class="browser-toolbar">
         <button class="btn btn-icon" data-action="reload" title="Muat ulang">${ICONS.reload}</button>
@@ -277,6 +288,7 @@ function browserView() {
         </div>
         <button class="btn btn-primary" data-action="load-browser">Buka</button>
         <button class="btn btn-icon" data-action="open-new" title="Buka di tab baru">${ICONS.external}</button>
+        <button class="btn btn-icon" data-action="to-diagnose" title="Diagnosa koneksi">${ICONS.diagnose}</button>
         <span style="width:1px;height:24px;background:var(--border);margin:0 3px"></span>
         <button class="chip ${state.mode === 'embed' ? 'active' : ''}" data-mode="embed">Embed</button>
         <button class="chip ${state.mode === 'proxy' ? 'active' : ''}" data-mode="proxy">Proxy</button>
@@ -306,6 +318,8 @@ function browserView() {
                 ['https://developer.mozilla.org', 'developer.mozilla.org'],
                 ['https://httpbin.org/get', 'httpbin.org/get'],
                 ['https://api.github.com', 'api.github.com (demo tool)'],
+                ['https://registry.npmjs.org', 'registry.npmjs.org (demo tool)'],
+                ['https://pypi.org', 'pypi.org (demo tool)'],
               ].map(([u, label]) => `<button class="chip" data-example="${u}">${label}</button>`).join('')}
             </div>
           </div>
@@ -334,6 +348,10 @@ function httpView() {
     <div class="card" style="margin-bottom:16px">
       <div class="card-body">
         <div class="row">
+          <div class="field" style="flex:0 0 110px">
+            <label class="field-label">TIMEOUT</label>
+            <select id="httpTimeout">${[15000, 30000, 60000].map((t) => `<option value="${t}" ${state.http.timeout === t ? 'selected' : ''}>${t / 1000}s</option>`).join('')}</select>
+          </div>
           <div class="field" style="flex:0 0 130px">
             <label class="field-label">METHOD</label>
             <select id="httpMethod">${['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].map((m) => `<option ${state.http.method === m ? 'selected' : ''}>${m}</option>`).join('')}</select>
@@ -349,6 +367,7 @@ function httpView() {
           <button class="chip" data-preset-url="https://httpbin.org/get">httpbin GET</button>
           <button class="chip" data-preset-url="https://httpbin.org/status/404">Contoh 404</button>
           <button class="chip" data-preset-url="https://example.com">example.com</button>
+          <button class="chip" data-preset-url="https://registry.npmjs.org">npm registry</button>
           <button class="chip" data-action="to-curl" style="margin-left:auto">${ICONS.terminal} Kirim ke cURL Lab</button>
         </div>
       </div>
@@ -513,6 +532,39 @@ function headersView() {
       <div class="card"><div class="empty-state"><div class="empty-icon">${ICONS.shield}</div><h3>Belum ada data header</h3><p>Masukkan URL lalu klik <strong>Audit Header</strong> untuk memeriksa response header situs tersebut.</p></div></div>`}`;
 }
 
+function diagnoseView() {
+  const r = state.diagnoseResult;
+  const failed = r?.checks.find((c) => !c.ok);
+  const advice = {
+    DNS: 'Domain tidak bisa di-resolve dari perangkat/server. Cek ejaan, koneksi internet, atau ganti Private DNS HP ke Automatic.',
+    TCP: 'Koneksi ke host:port diblokir atau server tujuan tidak menjawab. Cek VPN, firewall, dan pastikan HP/PC di jaringan yang sama untuk web lokal.',
+    TLS: 'Handshake TLS gagal. Di Termux coba: pkg install ca-certificates -y, lalu restart server. Bisa juga karena WAF/proxy jaringan.',
+    HTTP: 'Server menerima koneksi tapi menolak request otomatis (WAF/anti-bot) atau mengembalikan error. Sitasi seperti ini memang tidak bisa di-embed.',
+  };
+  return `
+    ${pageHead('TOOLS · DIAGNOSTICS', 'Konektivitas', 'Cek satu per satu: DNS → TCP → TLS → HTTP. Alat ini menunjukkan tepat di mana koneksi ke sebuah URL terputus.')}
+    <div class="card" style="margin-bottom:16px"><div class="card-body">
+      <div class="row">
+        <div class="field"><label class="field-label">URL TUJUAN</label><input id="diagnoseUrl" value="${esc(state.diagnoseUrl)}" placeholder="https://contoh.com" spellcheck="false" /></div>
+        <div class="field" style="flex:0 0 110px"><label class="field-label">TIMEOUT</label><select id="diagnoseTimeout">${[5000, 15000, 30000, 60000].map((t) => `<option value="${t}" ${state.http.timeout === t ? 'selected' : ''}>${t / 1000}s</option>`).join('')}</select></div>
+        <button class="btn btn-primary" id="diagnoseRun" style="height:41px" ${state.busy ? 'disabled' : ''}>${state.busy ? '<span class="spinner"></span>' : ICONS.diagnose} Diagnosa</button>
+      </div>
+    </div></div>
+    ${r ? `
+      ${failed ? `<div class="notice" style="margin-bottom:16px">${ICONS.info}<div><strong>Terputus di lapisan ${esc(failed.layer)}.</strong> ${esc(advice[failed.layer] || 'Periksa koneksi dan pengaturan jaringan.')}</div></div>`
+        : `<div class="notice info" style="margin-bottom:16px">${ICONS.info}<div><strong>Semua lapisan berhasil.</strong> Koneksi dari server ke <span class="mono">${esc(r.host)}</span> bagus. Bila iframe tetap kosong, situsnya memang melarang dibingkai — coba mode Proxy atau buka di tab baru.</div></div>`}
+      <div class="card"><div class="card-head"><h3>Hasil Diagnosa</h3><div class="sub">${esc(r.url)} · port ${r.port}</div></div>
+        <div class="card-body">
+          ${r.checks.map((c) => `<div class="header-check">
+            <div class="check-icon ${c.ok ? 'ok' : 'danger'}">${c.ok ? '✓' : '×'}</div>
+            <div class="check-body"><div class="check-title">${esc(c.layer)} <span class="badge ${c.ok ? 'ok' : 'danger'}" style="margin-left:5px">${c.ok ? 'OK' : 'Gagal'}</span> <span class="dim mono" style="font-size:10px">${fmtMs(c.ms)}</span></div>
+            <div class="check-note">${esc(c.detail)}</div></div>
+          </div>`).join('')}
+        </div>
+      </div>` : `
+      <div class="card"><div class="empty-state"><div class="empty-icon">${ICONS.diagnose}</div><h3>Belum ada diagnosa</h3><p>Masukkan URL lalu klik <strong>Diagnosa</strong> untuk melihat lapisan mana yang gagal.</p></div></div>`}`;
+}
+
 function dnsView() {
   const r = state.dnsResult;
   const recordRows = (name, values) => `
@@ -577,7 +629,7 @@ function activityView() {
     </div>`;
 }
 
-const VIEWS = { browser: browserView, http: httpView, curl: curlView, headers: headersView, dns: dnsView, network: networkView, activity: activityView };
+const VIEWS = { browser: browserView, http: httpView, curl: curlView, headers: headersView, dns: dnsView, diagnose: diagnoseView, network: networkView, activity: activityView };
 
 function render() {
   if (!document.getElementById('app').firstChild) shell();
@@ -613,6 +665,7 @@ function bindView() {
     on('httpUrl', 'input', (e) => { state.http.url = e.target.value; });
     on('httpBody', 'input', (e) => { state.http.body = e.target.value; });
     on('httpFollow', 'change', (e) => { state.http.followRedirects = e.target.checked; });
+    on('httpTimeout', 'change', (e) => { state.http.timeout = Number(e.target.value); });
     on('httpUrl', 'keydown', (e) => { if (e.key === 'Enter') doInspect(); });
     on('httpSend', 'click', doInspect);
     document.querySelectorAll('[data-preset-url]').forEach((el) => el.addEventListener('click', () => {
@@ -641,6 +694,12 @@ function bindView() {
     on('headersUrl', 'keydown', (e) => { if (e.key === 'Enter') runHeaderAudit(); });
     on('headersRun', 'click', runHeaderAudit);
   }
+  if (state.view === 'diagnose') {
+    on('diagnoseUrl', 'input', (e) => { state.diagnoseUrl = e.target.value; });
+    on('diagnoseTimeout', 'change', (e) => { state.http.timeout = Number(e.target.value); });
+    on('diagnoseUrl', 'keydown', (e) => { if (e.key === 'Enter') runDiagnose(); });
+    on('diagnoseRun', 'click', runDiagnose);
+  }
   if (state.view === 'dns') {
     on('dnsHost', 'input', (e) => { state.dnsHost = e.target.value; });
     on('dnsHost', 'keydown', (e) => { if (e.key === 'Enter') runDns(); });
@@ -661,6 +720,7 @@ async function doInspect(options = {}) {
       headers: Object.fromEntries(state.http.headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value])),
       body: ['POST', 'PUT', 'PATCH'].includes(state.http.method) ? state.http.body : null,
       followRedirects: state.http.followRedirects,
+      timeout: state.http.timeout,
     });
     state.httpResult = { ...result, at: Date.now() };
     if (result.error) { log('error', `HTTP request gagal: ${result.error}`); toast(result.error, true); }
@@ -697,12 +757,32 @@ async function runHeaderAudit() {
   }
 }
 
+async function runDiagnose() {
+  const url = document.getElementById('diagnoseUrl')?.value || state.diagnoseUrl;
+  state.diagnoseUrl = url;
+  state.busy = true;
+  render();
+  log('info', `Diagnosa konektivitas: ${url}`);
+  try {
+    state.diagnoseResult = await api('/api/diagnose', { url, timeout: state.http.timeout });
+    const failed = state.diagnoseResult.checks.find((c) => !c.ok);
+    if (failed) log('warn', `${url} terputus di lapisan ${failed.layer}: ${failed.detail}`);
+    else log('success', `${url}: DNS, TCP, TLS, dan HTTP semuanya berhasil.`);
+  } catch (err) {
+    toast(err.message, true);
+    log('error', err.message);
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
 async function runCurl() {
   state.busy = true;
   render();
   log('console', `$ ${state.curlCommand}`);
   try {
-    const result = await api('/api/curl', { command: state.curlCommand });
+    const result = await api('/api/curl', { command: state.curlCommand, timeout: state.http.timeout });
     state.curlResult = result;
     if (result.error) { toast(result.error, true); log('error', result.error); }
     else {
@@ -796,6 +876,10 @@ document.addEventListener('click', async (e) => {
     case 'to-dns':
       state.dnsHost = state.url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
       setView('dns');
+      break;
+    case 'to-diagnose':
+      state.diagnoseUrl = state.loadedUrl || state.url;
+      setView('diagnose');
       break;
     case 'to-curl':
       state.curlCommand = curlFromState();
