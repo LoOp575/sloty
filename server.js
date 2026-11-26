@@ -496,6 +496,7 @@ const server = http.createServer(async (req, res) => {
           body: payload.body || null,
           followRedirects: payload.followRedirects !== false,
           timeout: clamp(payload.timeout, 5000, 60000) || DEFAULT_TIMEOUT,
+          maxBytes: clamp(payload.maxBytes, 1024, MAX_BODY) || MAX_BODY,
         });
         sendJson(res, result.error ? 200 : 200, result);
       } else if (url.pathname === '/api/curl') {

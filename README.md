@@ -14,7 +14,7 @@ Buka `http://localhost:3000` (atau URL preview yang diberikan). Port bisa diubah
 
 | Menu | Fungsi |
 | --- | --- |
-| **Browser Embed** | Membuka URL di dalam iframe, mode *Proxy* (HTML diambil server lalu dirender dengan `srcdoc`) untuk situs yang memblokir iframe, pilihan viewport desktop/tablet/mobile, buka tab baru. |
+| **Browser Launcher** | Mode utama: URL langsung dibuka di browser perangkat, dashboard mencatat sesi, durasi, klik menu, dan riwayat status (monitoring berkala). Mode **Embed** (iframe) dan **Proxy** tetap tersedia. |
 | **HTTP Checker** | Kirim request GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS dengan custom header dan body; lihat status, header, redirect chain, body, serta timing. |
 | **cURL Lab** | Menjalankan perintah cURL di server dan menampilkan stdout, stderr, exit code, dan durasi. Opsi yang menulis file diblokir. |
 | **Security Headers** | Audit CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, dan lain-lain dengan skor 0–100. |
@@ -22,6 +22,13 @@ Buka `http://localhost:3000` (atau URL preview yang diberikan). Port bisa diubah
 | **Network Timing** | Waterfall DNS → TCP → TLS → TTFB → download dari inspeksi terakhir. |
 | **Konektivitas / Diagnostics** | Cek DNS → TCP → TLS → HTTP satu per satu untuk melihat tepat di mana koneksi ke URL terputus. |
 | **Activity Log** | Riwayat aksi dan pesan `console.log`/error dari halaman yang dibuka dalam mode Proxy. |
+
+## Alur kerja launcher
+
+1. Masukkan URL di address bar → halaman terbuka di browser HP/perangkat.
+2. Kembali ke dashboard: kartu **Sesi pengujian aktif** menampilkan URL, waktu buka, dan durasi.
+3. Klik menu tool — URL otomatis terisi dan setiap klik tercatat di **Activity Log**.
+4. Klik **Mulai monitoring status** untuk mencatat status HTTP dan response time setiap 15 detik.
 
 ## Catatan
 

@@ -45,8 +45,10 @@ const state = {
   view: 'browser',
   url: 'https://example.com',
   loadedUrl: '',
-  mode: 'embed',
+  mode: 'external',
   device: 'desktop',
+  lastOpened: null,
+  monitor: { active: false, history: [], timer: null, interval: 15000 },
   proxyHtml: '',
   proxyInfo: null,
   frameLoadMs: null,
@@ -173,7 +175,15 @@ function shell() {
     document.getElementById('backdrop').classList.toggle('show');
   });
   document.getElementById('backdrop').addEventListener('click', closeMenu);
-  app.querySelectorAll('[data-view]').forEach((el) => el.addEventListener('click', () => setView(el.dataset.view)));
+  app.querySelectorAll('[data-view]').forEach((el) => el.addEventListener('click', () => {
+    const label = el.textContent.trim();
+    log('action', `Menu "${label}" dibuka${state.lastOpened ? ` · ${state.lastOpened.url}` : ''}`);
+    setView(el.dataset.view);
+  }));
+  setInterval(() => {
+    const el = document.getElementById('sessionElapsed');
+    if (el && state.lastOpened) el.textContent = fmtMs(Date.now() - state.lastOpened.openedAt);
+  }, 1000);
   fetch('/api/health').then((r) => r.json()).then((data) => {
     const el = document.getElementById('serverStatus');
     if (el) el.textContent = data.ok ? 'Server aktif · siap menguji' : 'Server bermasalah';
@@ -191,6 +201,12 @@ function closeMenu() {
 function setView(view) {
   state.view = view;
   closeMenu();
+  if (state.lastOpened && ['http', 'headers', 'curl', 'dns', 'diagnose'].includes(view)) {
+    state.http.url = state.lastOpened.url;
+    state.dnsHost = state.lastOpened.url.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    state.diagnoseUrl = state.lastOpened.url;
+    state.curlCommand = `curl -I ${quote(state.lastOpened.url)}`;
+  }
   render();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -209,7 +225,18 @@ function goUrl(value, view = 'browser') {
   state.proxyHtml = '';
   state.proxyInfo = null;
   state.frameLoadMs = null;
-  log('info', `Membuka ${state.url} di browser embed (${state.mode}).`);
+  if (state.monitor.timer) clearInterval(state.monitor.timer);
+  state.monitor.timer = null;
+  state.monitor.active = false;
+  state.monitor.history = [];
+  state.lastOpened = { url: state.url, openedAt: Date.now() };
+  log('open', `URL dimasukkan: ${state.url} → dibuka di browser eksternal.`);
+  if (state.mode === 'external') {
+    setView('browser');
+    window.open(state.url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  log('info', `Membuka ${state.url} di dashboard (${state.mode}).`);
   setView(view);
   if (state.mode === 'proxy') loadProxy();
   else {
@@ -267,21 +294,79 @@ function footHtml() {
   if (!state.loadedUrl) return '<span>Belum ada halaman dimuat</span>';
   return `
     <span>URL: ${esc(shorten(state.loadedUrl, 72))}</span><span class="sep"></span>
-    <span>Mode: ${state.mode === 'proxy' ? 'Proxy (server-side)' : 'Embed (iframe)'}</span><span class="sep"></span>
+    <span>Mode: ${state.mode === 'proxy' ? 'Proxy (server-side)' : state.mode === 'external' ? 'Browser eksternal' : 'Embed (iframe)'}</span><span class="sep"></span>
     <span>Viewport: ${{ desktop: 'Desktop · penuh', tablet: 'Tablet · 820px', mobile: 'Mobile · 390px' }[state.device]}</span><span class="sep"></span>
     <span>${state.frameLoadMs != null ? `Muat: ${fmtMs(state.frameLoadMs)}` : 'Menunggu halaman…'}</span>
     <span style="margin-left:auto" id="proxyStatus"></span>`;
 }
 
+function sessionPanelHtml() {
+  if (!state.lastOpened) {
+    return `<div class="browser-viewport">
+      <div class="empty-state">
+        <div class="empty-icon">${ICONS.external}</div>
+        <h3>Masukkan URL, web langsung dibuka di browser HP</h3>
+        <p>Dashboard tidak menampilkan situs di dalam panel. Setelah kamu masukkan URL, halaman akan terbuka di browser perangkat. Kembali ke sini kapan saja — semua klik menu dan status site tercatat di Activity Log.</p>
+        <div class="example-row">
+          ${[
+            ['https://example.com', 'example.com'],
+            ['https://api.github.com', 'api.github.com (demo tool)'],
+            ['https://registry.npmjs.org', 'registry.npmjs.org (demo tool)'],
+            ['https://pypi.org', 'pypi.org (demo tool)'],
+          ].map(([u, label]) => `<button class="chip" data-example="${u}">${label}</button>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  }
+  const session = state.lastOpened;
+  const history = state.monitor.history;
+  const tools = [
+    ['to-http', 'HTTP Checker', 'activity'],
+    ['to-curl', 'cURL Lab', 'terminal'],
+    ['to-headers', 'Security Headers', 'shield'],
+    ['to-dns', 'DNS Lookup', 'dns'],
+    ['to-diagnose', 'Konektivitas', 'diagnose'],
+    ['to-network', 'Network Timing', 'network'],
+  ];
+  return `<div class="browser-viewport" style="background:var(--panel-2);display:block;overflow:auto">
+    <div style="width:min(760px,100%);margin:0 auto;padding:24px">
+      <div class="card">
+        <div class="card-head"><h3>Sesi pengujian aktif</h3><div class="sub"><span class="status-dot" style="display:inline-block;margin-right:6px"></span>${state.monitor.active ? 'Monitoring berjalan' : 'Tercatat'}</div></div>
+        <div class="card-body">
+          <div class="row-tight"><span class="badge info">BROWSER EKSTERNAL</span><span class="mono" style="word-break:break-all">${esc(session.url)}</span></div>
+          <div class="grid-3" style="margin-top:14px">
+            ${metric('DIBUKA', new Date(session.openedAt).toLocaleTimeString('id-ID', { hour12: false }), 'Waktu URL dimasukkan')}
+            ${metric('DURASI', `<span id="sessionElapsed">${fmtMs(Date.now() - session.openedAt)}</span>`, 'Sejak sesi dibuka')}
+            ${metric('STATUS', String(history.length), 'Respons tercatat')}
+          </div>
+          <div class="row-tight" style="margin-top:16px">
+            <button class="btn btn-primary" data-action="reopen">${ICONS.external} Buka ulang di browser</button>
+            <button class="btn ${state.monitor.active ? '' : 'btn-violet'}" data-action="toggle-monitor">${state.monitor.active ? '⏸ Hentikan monitoring' : '▶ Mulai monitoring status'}</button>
+            <button class="btn" data-action="log-done">Tandai selesai</button>
+          </div>
+          <div class="muted small" style="margin-top:10px">Kalau popup diblokir browser, reset eksternal di pojok kanan atas atau buka manual URL di atas.</div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px"><div class="card-head"><h3>Lanjut ke tool</h3><div class="sub">URL otomatis terisi</div></div>
+        <div class="card-body row-tight">${tools.map(([action, label, icon]) => `<button class="chip" data-action="${action}">${ICONS[icon]} ${label}</button>`).join('')}</div>
+      </div>
+      <div class="card" style="margin-top:14px"><div class="card-head"><h3>Riwayat status</h3><div class="sub">${state.monitor.interval / 1000} detik sekali</div></div>
+        <div class="card-body">${history.length ? `<table class="kv"><thead><tr><th>Waktu</th><th>Status</th><th>Respons</th></tr></thead><tbody>${history.slice(0, 20).map((h) => `<tr><td class="key">${esc(h.at)}</td><td><span class="badge ${h.error ? 'danger' : statusTone(h.status)}">${esc(h.error ? 'GAGAL' : h.status)}</span></td><td>${esc(h.error ? shorten(h.error, 70) : fmtMs(h.ms))}</td></tr>`).join('')}</tbody></table>`
+          : '<div class="muted small">Belum ada status tercatat. Klik <strong>Mulai monitoring status</strong> untuk mencatat respons situs secara berkala.</div>'}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
 function browserView() {
   const deviceBtn = (id, icon, label) => `<button class="btn btn-icon ${state.device === id ? 'btn-primary' : ''}" data-device="${id}" title="${label}">${ICONS[icon]}</button>`;
   return `
-    ${pageHead('BROWSER · EMBED', 'Browser Embed', 'Masukkan URL situs, lalu jalankan di dalam dashboard ini. Gunakan mode Proxy bila situs memblokir iframe (X-Frame-Options / CSP frame-ancestors).')}
-    <div class="notice" style="margin-bottom:16px">${ICONS.info}<div><strong>Catatan iframe:</strong> banyak situs besar (Google, GitHub, Facebook, dll.) secara sengaja melarang ditampilkan di dalam iframe. Bila halaman kosong, coba tombol <strong>Proxy</strong> atau buka di tab baru. Console dari halaman proxy otomatis masuk ke Activity Log.</div></div>
+    ${pageHead('BROWSER · LAUNCHER', 'Browser Launcher', 'Masukkan URL → halaman langsung dibuka di browser perangkat. Dashboard mencatat sesi, klik menu, riwayat status, dan menyediakan tool pengujian tanpa memaksa situs tampil di dalam iframe.')}
+    <div class="notice info" style="margin-bottom:16px">${ICONS.info}<div><strong>Alur kerja:</strong> masukkan URL → situs terbuka di browser HP → kembali ke dashboard → klik menu pengujian. Semua aksi dan status tercatat otomatis. Mode <strong>Embed</strong> / <strong>Proxy</strong> tetap tersedia kalau kamu ingin menampilkan halaman di dalam panel.</div></div>
     ${/:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(state.loadedUrl || state.url) ? `<div class="notice info" style="margin-bottom:16px">${ICONS.info}<div><strong>URL lokal terdeteksi.</strong> <span class="mono">localhost</span> / <span class="mono">127.0.0.1</span> di sini merujuk ke perangkat yang menjalankan server (HP Termux), bukan PC lain. Kalau web kamu ada di laptop, gunakan IP LAN seperti <span class="mono">http://192.168.1.5:8080</span> dan pastikan PC serta HP berada di WiFi yang sama.</div></div>` : ''}
     <div class="browser-shell">
       <div class="browser-toolbar">
-        <button class="btn btn-icon" data-action="reload" title="Muat ulang">${ICONS.reload}</button>
+        ${state.mode !== 'external' ? `<button class="btn btn-icon" data-action="reload" title="Muat ulang">${ICONS.reload}</button>` : ''}
         <div class="input-wrap" style="flex:1">
           <span class="url-icon">${ICONS.globe}</span>
           <input id="browserUrl" value="${esc(state.loadedUrl || state.url)}" placeholder="https://contoh.com" spellcheck="false" style="padding-left:36px" />
@@ -290,14 +375,16 @@ function browserView() {
         <button class="btn btn-icon" data-action="open-new" title="Buka di tab baru">${ICONS.external}</button>
         <button class="btn btn-icon" data-action="to-diagnose" title="Diagnosa koneksi">${ICONS.diagnose}</button>
         <span style="width:1px;height:24px;background:var(--border);margin:0 3px"></span>
+        <button class="chip ${state.mode === 'external' ? 'active' : ''}" data-mode="external">Browser Eksternal</button>
         <button class="chip ${state.mode === 'embed' ? 'active' : ''}" data-mode="embed">Embed</button>
         <button class="chip ${state.mode === 'proxy' ? 'active' : ''}" data-mode="proxy">Proxy</button>
         <span style="width:1px;height:24px;background:var(--border);margin:0 3px"></span>
+        ${state.mode !== 'external' ? `
         ${deviceBtn('desktop', 'monitor', 'Desktop')}
         ${deviceBtn('tablet', 'tablet', 'Tablet')}
-        ${deviceBtn('mobile', 'mobile', 'Mobile')}
+        ${deviceBtn('mobile', 'mobile', 'Mobile')}` : ''}
       </div>
-      ${state.loadedUrl ? `
+      ${state.mode === 'external' ? sessionPanelHtml() : state.loadedUrl ? `
         <div class="browser-viewport has-frame">
           <div class="device-frame ${state.device}">
             <iframe id="previewFrame" ${state.mode === 'proxy' ? 'srcdoc=""' : `src="${esc(state.loadedUrl)}"`}
@@ -707,6 +794,40 @@ function bindView() {
   }
 }
 
+async function pollStatus() {
+  const url = state.lastOpened?.url;
+  if (!url) return;
+  const at = now();
+  try {
+    const result = await api('/api/inspect', { url, method: 'HEAD', followRedirects: true, timeout: 10000, maxBytes: 1024 });
+    state.monitor.history.unshift({ at, status: result.status, ms: result.timings?.total ?? null, error: result.error || null });
+    if (result.error) log('warn', `Monitoring ${url}: gagal · ${shorten(result.error, 90)}`);
+    else log('success', `Monitoring ${url}: ${result.status} · ${fmtMs(result.timings.total)}`);
+  } catch (err) {
+    state.monitor.history.unshift({ at, status: null, ms: null, error: err.message });
+    log('warn', `Monitoring ${url}: ${err.message}`);
+  }
+  if (state.monitor.history.length > 40) state.monitor.history.length = 40;
+  if (state.view === 'browser') render();
+}
+
+function toggleMonitor() {
+  if (!state.lastOpened) return;
+  if (state.monitor.active) {
+    clearInterval(state.monitor.timer);
+    state.monitor.timer = null;
+    state.monitor.active = false;
+    log('info', `Monitoring dihentikan: ${state.lastOpened.url}`);
+    render();
+    return;
+  }
+  state.monitor.active = true;
+  log('info', `Monitoring status dimulai: ${state.lastOpened.url} setiap ${state.monitor.interval / 1000} detik.`);
+  pollStatus();
+  state.monitor.timer = setInterval(pollStatus, state.monitor.interval);
+  render();
+}
+
 async function doInspect(options = {}) {
   const url = options.url || (document.getElementById('httpUrl')?.value ?? state.http.url);
   state.http.url = url;
@@ -836,6 +957,12 @@ document.addEventListener('click', async (e) => {
     const mode = target.dataset.mode;
     if (mode === state.mode) return;
     state.mode = mode;
+    if (mode === 'external') {
+      if (!state.lastOpened && state.loadedUrl) state.lastOpened = { url: state.loadedUrl, openedAt: Date.now() };
+      log('info', 'Mode Browser Eksternal aktif. URL berikutnya akan dibuka di browser perangkat.');
+      render();
+      return;
+    }
     if (mode === 'proxy') {
       state.proxyHtml = '';
       log('info', 'Beralih ke mode Proxy; mengambil HTML lewat server.');
@@ -857,6 +984,18 @@ document.addEventListener('click', async (e) => {
     return;
   }
   switch (action) {
+    case 'reopen':
+      if (state.lastOpened) {
+        window.open(state.lastOpened.url, '_blank', 'noopener,noreferrer');
+        log('open', `Buka ulang: ${state.lastOpened.url}`);
+      }
+      break;
+    case 'toggle-monitor': toggleMonitor(); break;
+    case 'log-done':
+      if (state.lastOpened) log('success', `Sesi selesai: ${state.lastOpened.url} · total ${fmtMs(Date.now() - state.lastOpened.openedAt)}`);
+      toast('Sesi ditandai selesai dan tercatat di Activity Log.');
+      break;
+    case 'to-network': setView('network'); break;
     case 'reload':
       if (state.mode === 'proxy') loadProxy();
       else {

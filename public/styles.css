@@ -262,6 +262,8 @@ small { font-size: 11px; }
 .log-level.error { color: var(--danger); }
 .log-level.warn { color: var(--warn); }
 .log-level.console { color: var(--violet); }
+.log-level.open { color: var(--accent); }
+.log-level.action { color: #b9afff; }
 .log-message { color: var(--muted); word-break: break-word; }
 
 .score-wrap { display: flex; align-items: center; gap: 18px; }
