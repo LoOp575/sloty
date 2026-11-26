@@ -1,0 +1,14 @@
+{
+  "name": "sloty-devlab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web testing playground: embed browser, HTTP response checker, cURL lab, security headers, DNS lookup, network timing, dan activity log.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
